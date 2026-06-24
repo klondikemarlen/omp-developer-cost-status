@@ -1,8 +1,6 @@
 import fs from "node:fs"
+import { homedir } from "node:os"
 import path from "node:path"
-
-import { getPluginSettings } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/loader"
-
 import {
   formatDeveloperCost,
   parseDeveloperCostConfig,
@@ -22,6 +20,16 @@ type RuntimeState = {
   activeContext?: ExtensionContext
   activeSessionId?: string
   activeConfig?: DeveloperCostConfig
+}
+
+type PluginSettingsByName = Record<string, Record<string, unknown>>
+
+type PluginRuntimeConfig = {
+  settings?: PluginSettingsByName
+}
+
+type ProjectPluginOverrides = {
+  settings?: PluginSettingsByName
 }
 
 type SessionEntryLike = {
@@ -218,9 +226,18 @@ function clearActiveStatus(runtimeState: RuntimeState, ctx: ExtensionContext): v
 }
 
 async function loadConfig(ctx: ExtensionContext): Promise<DeveloperCostConfig> {
-  const settings = await getPluginSettings(PLUGIN_NAME, ctx.cwd)
+  const [runtimeConfig, projectOverrides] = await Promise.all([
+    readJsonFile<PluginRuntimeConfig>(pluginsLockfilePath()),
+    readJsonFile<ProjectPluginOverrides>(projectPluginOverridesPath(ctx.cwd)),
+  ])
+  const globalSettings = runtimeConfig?.settings?.[PLUGIN_NAME] ?? {}
+  const projectSettings = projectOverrides?.settings?.[PLUGIN_NAME] ?? {}
+  const mergedSettings = {
+    ...globalSettings,
+    ...projectSettings,
+  }
 
-  return parseDeveloperCostConfig(settings as DeveloperCostOptions)
+  return parseDeveloperCostConfig(mergedSettings as DeveloperCostOptions)
 }
 
 function isTopLevelSession(ctx: ExtensionContext): boolean {
@@ -245,4 +262,28 @@ function updateStatus(
 ): void {
   const text = formatDeveloperCost(state.totalCost, config.currencyCode)
   ctx.ui.setStatus(STATUS_KEY, ctx.ui.theme.fg("dim", `${text} (${config.label})`))
+}
+
+async function readJsonFile<T>(filePath: string): Promise<T | undefined> {
+  try {
+    const raw = await fs.promises.readFile(filePath, "utf8")
+
+    return JSON.parse(raw) as T
+  } catch (error) {
+    if (isEnoent(error)) return undefined
+
+    return undefined
+  }
+}
+
+function isEnoent(error: unknown): boolean {
+  return error instanceof Error && "code" in error && error.code === "ENOENT"
+}
+
+function pluginsLockfilePath(): string {
+  return path.join(homedir(), ".omp", "plugins", "omp-plugins.lock.json")
+}
+
+function projectPluginOverridesPath(cwd: string): string {
+  return path.join(cwd, ".omp", "plugin-overrides.json")
 }
