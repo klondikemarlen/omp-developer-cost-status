@@ -7,16 +7,19 @@ OMP plugin that adds a developer-time cost meter to the footer status line.
 **WHY this plugin exists:** OMP shows model and tool activity, but it does not track what the
 developer's own active time costs while they drive a session.
 
-**WHAT this plugin produces:** A footer status segment like `$3.13 (dev)` that stays active after
-each prompt and checks for settled 5-minute windows on a configurable cadence.
+**WHAT this plugin produces:** A footer status segment like `$0.16 (dev)` that stays active after
+each prompt and refreshes on a configurable cadence while the session is active.
+
+Canonical feature requirements live in [`spec/developer-cost-status.yml`](spec/developer-cost-status.yml).
 
 **Decision Rules:**
 - **Prompt-driven billing:** Only user agent prompts start or extend the timer.
-- **Five-minute liveness:** Each prompt keeps the meter active for `activeWindowMinutes`.
-- **Configurable refresh:** The plugin checks every `refreshIntervalSeconds` for settled windows,
-  so teams can slow down the background status update cadence.
-- **Settled-window display:** The number changes only after a full active window elapses. It does
-  not continuously count up during the active window.
+- **Five-minute liveness:** A session is active only if the user sent a prompt within the last
+  `activeWindowMinutes`.
+- **Configurable refresh:** The UI refreshes every `refreshIntervalSeconds` while active; this
+  controls display cadence, not the billing window size.
+- **Continuous active-time display:** The number changes by the cost of elapsed active time on each
+  refresh. Cost is stored precisely and rounded only when rendering status text.
 - **Session-scoped meter:** Billing is keyed to the current top-level session id. Resume the same
   session and the meter continues.
 - **Top-level only:** Subagent and artifact sessions do not get their own developer meter.
@@ -44,13 +47,13 @@ Display style:
 
 - format: `$3.13 (dev)`
 - dim hook-status styling
-- checks for newly settled windows every `refreshIntervalSeconds` while the session is active
+- refreshes every `refreshIntervalSeconds` while the session is active
 
 Billing behavior:
 
 - each prompt keeps billing alive for `activeWindowMinutes`
-- only full elapsed windows are committed to saved state and shown in the status line
-- the on-screen number does not move before the next full window settles
+- cost accrues continuously during active time and stops when the active window expires
+- accumulated cost is stored as a precise decimal string and formatted only for display
 - if you resume the same session id later, the plugin reloads the last persisted state and keeps
   adding to it
 - a new session id starts a new meter
@@ -66,7 +69,8 @@ The plugin ships with simple defaults:
 - `refreshIntervalSeconds`: `15`
 - `label`: `dev`
 
-That yields a default 5-minute developer cost of about `$3.13`.
+That yields a default 5-minute developer cost of about `$3.13`, or about `$0.16` per active
+15-second refresh.
 
 If you work `49` weeks per year instead, the same defaults produce about `$3.32` per 5-minute
 window.
@@ -74,7 +78,9 @@ window.
 ## Formula
 
 ```text
-windowRate = monthlySalary × 12 / (hoursPerWeek × weeksPerYear × 60) × activeWindowMinutes
+activeCost = monthlySalary × 12 / (hoursPerWeek × weeksPerYear × 60 × 60 × 1000) × activeMilliseconds
+refreshCost = activeCost where activeMilliseconds = refreshIntervalSeconds × 1000
+windowRate = activeCost where activeMilliseconds = activeWindowMinutes × 60 × 1000
 ```
 
 Default example:
@@ -86,7 +92,8 @@ weeksPerYear = 52
 activeWindowMinutes = 5
 refreshIntervalSeconds = 15
 
-windowRate = $3.13
+15-second refresh = $0.16
+5-minute active window = $3.13
 ```
 
 49-week example:
@@ -97,7 +104,7 @@ hoursPerWeek = 40
 weeksPerYear = 49
 activeWindowMinutes = 5
 
-windowRate = $3.32
+5-minute active window = $3.32
 ```
 
 ## Install

@@ -1,3 +1,5 @@
+import Big from "big.js"
+
 export type DeveloperCostConfig = {
   monthlySalary: number
   hoursPerWeek: number
@@ -8,10 +10,10 @@ export type DeveloperCostConfig = {
 }
 
 export type DeveloperCostState = {
-  totalCost: number
+  totalCost: string
   activeStartAtMs?: number
   activeUntilMs?: number
-  billedWindows: number
+  lastSettledAtMs?: number
   lastPromptAtMs?: number
 }
 
@@ -32,7 +34,10 @@ const DEFAULT_REFRESH_INTERVAL_SECONDS = 15
 const DEFAULT_LABEL = "dev"
 const MONTHS_PER_YEAR = 12
 const MINUTES_PER_HOUR = 60
-const MS_PER_MINUTE = 60 * 1000
+const SECONDS_PER_MINUTE = 60
+const MS_PER_SECOND = 1000
+const MS_PER_MINUTE = SECONDS_PER_MINUTE * MS_PER_SECOND
+const MS_PER_HOUR = MINUTES_PER_HOUR * MS_PER_MINUTE
 
 export function parseDeveloperCostConfig(options?: DeveloperCostOptions): DeveloperCostConfig {
   return {
@@ -49,8 +54,7 @@ export function parseDeveloperCostConfig(options?: DeveloperCostOptions): Develo
 
 export function emptyDeveloperCostState(): DeveloperCostState {
   return {
-    totalCost: 0,
-    billedWindows: 0,
+    totalCost: "0",
   }
 }
 
@@ -58,31 +62,28 @@ export function parseDeveloperCostState(value: unknown): DeveloperCostState | un
   if (typeof value !== "object" || value === null) return undefined
 
   const candidate = value as Record<string, unknown>
-  if (!isFiniteNumber(candidate.totalCost)) return undefined
-  if (!isFiniteNumber(candidate.billedWindows)) return undefined
+  const totalCost = parseDecimalString(candidate.totalCost)
+  if (totalCost === undefined) return undefined
 
   return {
-    totalCost: candidate.totalCost,
+    totalCost,
     activeStartAtMs: parseOptionalNumber(candidate.activeStartAtMs),
     activeUntilMs: parseOptionalNumber(candidate.activeUntilMs),
-    billedWindows: candidate.billedWindows,
+    lastSettledAtMs: parseOptionalNumber(candidate.lastSettledAtMs),
     lastPromptAtMs: parseOptionalNumber(candidate.lastPromptAtMs),
   }
 }
 
-export function windowRate(config: DeveloperCostConfig): number {
-  const monthlyMinutes =
-    (config.hoursPerWeek * config.weeksPerYear * MINUTES_PER_HOUR) / MONTHS_PER_YEAR
-
-  return (config.monthlySalary / monthlyMinutes) * config.activeWindowMinutes
+export function windowRate(config: DeveloperCostConfig): Big {
+  return costForActiveMs(config, activeWindowMs(config))
 }
 
 export function refreshIntervalMs(config: DeveloperCostConfig): number {
-  return config.refreshIntervalSeconds * MS_PER_MINUTE / MINUTES_PER_HOUR
+  return (config.refreshIntervalSeconds * MS_PER_MINUTE) / MINUTES_PER_HOUR
 }
 
-export function displayedDeveloperCost(state: DeveloperCostState): number {
-  return state.totalCost
+export function displayedDeveloperCost(state: DeveloperCostState): Big {
+  return Big(state.totalCost)
 }
 
 export function settleDeveloperCostState(
@@ -96,16 +97,13 @@ export function settleDeveloperCostState(
     return nextState
   }
 
-  const elapsedMs = Math.max(
-    0,
-    Math.min(nowMs, nextState.activeUntilMs) - nextState.activeStartAtMs,
-  )
-  const settledWindowCount = Math.floor(elapsedMs / activeWindowMs(config))
-  const newWindowCount = Math.max(0, settledWindowCount - nextState.billedWindows)
+  const settleFromMs = nextState.lastSettledAtMs ?? nextState.activeStartAtMs
+  const settleUntilMs = Math.min(nowMs, nextState.activeUntilMs)
+  const elapsedMs = Math.max(0, settleUntilMs - settleFromMs)
 
-  if (newWindowCount > 0) {
-    nextState.totalCost += newWindowCount * windowRate(config)
-    nextState.billedWindows += newWindowCount
+  if (elapsedMs > 0) {
+    nextState.totalCost = Big(nextState.totalCost).plus(costForActiveMs(config, elapsedMs)).toString()
+    nextState.lastSettledAtMs = settleUntilMs
   }
 
   if (nowMs < nextState.activeUntilMs) {
@@ -114,7 +112,7 @@ export function settleDeveloperCostState(
 
   delete nextState.activeStartAtMs
   delete nextState.activeUntilMs
-  nextState.billedWindows = 0
+  delete nextState.lastSettledAtMs
 
   return nextState
 }
@@ -127,14 +125,10 @@ export function recordDeveloperPrompt(
   const nextState = settleDeveloperCostState(state, promptAtMs, config)
   const windowMs = activeWindowMs(config)
 
-  if (
-    nextState.activeStartAtMs === undefined ||
-    nextState.activeUntilMs === undefined ||
-    promptAtMs > nextState.activeUntilMs
-  ) {
+  if (nextState.activeStartAtMs === undefined || nextState.activeUntilMs === undefined) {
     nextState.activeStartAtMs = promptAtMs
+    nextState.lastSettledAtMs = promptAtMs
     nextState.activeUntilMs = promptAtMs + windowMs
-    nextState.billedWindows = 0
   } else {
     nextState.activeUntilMs = Math.max(nextState.activeUntilMs, promptAtMs + windowMs)
   }
@@ -144,8 +138,15 @@ export function recordDeveloperPrompt(
   return nextState
 }
 
-export function formatDeveloperCost(value: number): string {
+export function formatDeveloperCost(value: Big): string {
   return `$${value.toFixed(2)}`
+}
+
+function costForActiveMs(config: DeveloperCostConfig, activeMs: number): Big {
+  const annualSalary = Big(config.monthlySalary).times(MONTHS_PER_YEAR)
+  const annualMs = Big(config.hoursPerWeek).times(config.weeksPerYear).times(MS_PER_HOUR)
+
+  return annualSalary.times(activeMs).div(annualMs)
 }
 
 function parsePositiveNumber(value: unknown): number | undefined {
@@ -167,6 +168,17 @@ function parseNonEmptyString(value: unknown): string | undefined {
   if (!trimmed) return undefined
 
   return trimmed
+}
+
+function parseDecimalString(value: unknown): string | undefined {
+  if (isFiniteNumber(value)) return Big(value).toString()
+  if (typeof value !== "string") return undefined
+
+  try {
+    return Big(value).toString()
+  } catch {
+    return undefined
+  }
 }
 
 function isFiniteNumber(value: unknown): value is number {

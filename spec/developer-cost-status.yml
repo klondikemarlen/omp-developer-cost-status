@@ -1,0 +1,45 @@
+feature: developer-cost-status
+status: implemented
+requirements:
+  - id: prompt_driven_activity
+    title: Prompt-driven activity
+    requirement: Only a real user prompt to a top-level agent session starts or extends developer-cost tracking.
+    rationale: Passive UI refreshes, subagents, and artifact sessions must not create developer time cost.
+  - id: active_window
+    title: Five-minute activity window
+    requirement: A session is active only while the user has sent at least one prompt within the last activeWindowMinutes.
+    default: 5 minutes
+    rationale: Developer cost represents active collaboration time, not idle terminal time.
+  - id: continuous_accrual
+    title: Continuous active-time accrual
+    requirement: While active, cost accrues continuously according to elapsed active milliseconds, not only after full five-minute windows.
+    formula: monthlySalary * 12 / (hoursPerWeek * weeksPerYear * 60 * 60 * 1000) * activeMilliseconds
+    rationale: The UI refresh should show the cost earned during the elapsed active interval.
+  - id: ui_refresh_interval
+    title: Configurable UI refresh
+    requirement: The status UI refreshes every refreshIntervalSeconds while the session is active.
+    default: 15 seconds
+    example: With the default rate, each 15-second active refresh adds about $0.16 before formatting.
+    rationale: refreshIntervalSeconds controls display cadence; it is not the billing window size.
+  - id: precise_storage
+    title: Precise persisted storage
+    requirement: Store accumulated cost as a decimal string produced from Big.js arithmetic, and format currency only at the UI boundary.
+    rationale: Avoid floating-point drift and avoid mixing storage precision with display rounding.
+  - id: session_scope
+    title: Session-scoped meter
+    requirement: Track and persist cost by top-level session id; resuming the same session continues its meter.
+    rationale: Each top-level session should preserve its own developer-cost total.
+  - id: top_level_only
+    title: Top-level sessions only
+    requirement: Subagent and artifact sessions must not create or display their own developer-cost meter.
+    rationale: Subagent work is driven by the top-level user prompt and should not double-count developer activity.
+  - id: spread_billing
+    title: Multi-session spread billing
+    status: planned
+    requirement: If the user is active in multiple top-level sessions during the same time span, divide developer cost across those sessions instead of double-counting it.
+    rationale: One developer cannot spend the same real-world time at full cost in multiple sessions simultaneously.
+non_requirements:
+  - id: no_model_cost_replacement
+    description: This plugin does not replace OMP model/tool usage cost; it adds developer-time cost.
+  - id: no_inline_status_until_omp_support
+    description: Current OMP plugin status uses ctx.ui.setStatus and renders on the hook-status line unless OMP adds plugin-defined inline status segments.
