@@ -7,16 +7,16 @@ OMP plugin that adds a developer-time cost meter to the footer status line.
 **WHY this plugin exists:** OMP shows model and tool activity, but it does not track what the
 developer's own active time costs while they drive a session.
 
-**WHAT this plugin produces:** A footer status segment like `$3.13 (dev)` that stays active for
-5 minutes after each prompt and refreshes on a configurable cadence.
+**WHAT this plugin produces:** A footer status segment like `$3.13 (dev)` that stays active after
+each prompt and checks for settled 5-minute windows on a configurable cadence.
 
 **Decision Rules:**
 - **Prompt-driven billing:** Only user agent prompts start or extend the timer.
 - **Five-minute liveness:** Each prompt keeps the meter active for `activeWindowMinutes`.
-- **Configurable refresh:** The visible number refreshes every `refreshIntervalSeconds` so teams
-  can slow it down if constant motion is distracting.
-- **Live display, settled billing:** The number updates during an active window, but persisted
-  billing still settles in 5-minute windows.
+- **Configurable refresh:** The plugin checks every `refreshIntervalSeconds` for settled windows,
+  so teams can slow down the background status update cadence.
+- **Settled-window display:** The number changes only after a full active window elapses. It does
+  not continuously count up during the active window.
 - **Session-scoped meter:** Billing is keyed to the current top-level session id. Resume the same
   session and the meter continues.
 - **Top-level only:** Subagent and artifact sessions do not get their own developer meter.
@@ -44,13 +44,13 @@ Display style:
 
 - format: `$3.13 (dev)`
 - dim hook-status styling
-- refreshes every `refreshIntervalSeconds` while the session is active
+- checks for newly settled windows every `refreshIntervalSeconds` while the session is active
 
 Billing behavior:
 
 - each prompt keeps billing alive for `activeWindowMinutes`
-- only full elapsed windows are committed to saved state
-- the on-screen number can move before the next full window settles
+- only full elapsed windows are committed to saved state and shown in the status line
+- the on-screen number does not move before the next full window settles
 - if you resume the same session id later, the plugin reloads the last persisted state and keeps
   adding to it
 - a new session id starts a new meter

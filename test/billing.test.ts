@@ -44,12 +44,12 @@ test("supports custom working weeks per year", () => {
   assert.equal(windowRate(customConfig).toFixed(2), "3.32")
 })
 
-test("shows a live partial value before a window settles", () => {
+test("does not display active window cost before the window settles", () => {
   const start = Date.UTC(2026, 0, 1, 12, 0, 0)
   const prompted = recordDeveloperPrompt(emptyDeveloperCostState(), start, config)
-  const halfway = displayedDeveloperCost(prompted, start + windowMs / 2, config)
+  const halfway = displayedDeveloperCost(prompted)
 
-  assert.equal(halfway.toFixed(2), "1.56")
+  assert.equal(halfway.toFixed(2), "0.00")
 })
 
 test("bills one window for a single prompt after five minutes", () => {

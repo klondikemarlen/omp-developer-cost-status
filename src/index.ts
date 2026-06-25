@@ -117,7 +117,7 @@ export default function developerCostStatusExtension(pi: ExtensionApi) {
       const state = stateForSession(sessionStates, ctx, ctx.sessionManager.getSessionId())
       const settledState = settleDeveloperCostState(state, Date.now(), config)
 
-      ctx.ui.notify(statusText(settledState, Date.now(), config), "info")
+      ctx.ui.notify(statusText(settledState, config), "info")
     },
   })
 
@@ -314,12 +314,12 @@ function updateStatus(
 ): void {
   ctx.ui.setStatus(
     STATUS_KEY,
-    ctx.ui.theme.fg("dim", statusText(state, Date.now(), config)),
+    ctx.ui.theme.fg("dim", statusText(state, config)),
   )
 }
 
-function statusText(state: DeveloperCostState, nowMs: number, config: DeveloperCostConfig): string {
-  const text = formatDeveloperCost(displayedDeveloperCost(state, nowMs, config))
+function statusText(state: DeveloperCostState, config: DeveloperCostConfig): string {
+  const text = formatDeveloperCost(displayedDeveloperCost(state))
 
   return `${text} (${config.label})`
 }
@@ -349,21 +349,40 @@ async function runtimeConfigSignature(ctx?: ExtensionContext): Promise<string> {
 }
 
 export async function readConfigSignature(filePaths: string[]): Promise<string> {
-  const fileSignatures = await Promise.all(filePaths.map(readConfigFileSignature))
+  const fileSignatures = await Promise.all(filePaths.map(readPluginSettingsSignature))
 
   return fileSignatures.join("\n")
 }
 
-async function readConfigFileSignature(filePath: string): Promise<string> {
+async function readPluginSettingsSignature(filePath: string): Promise<string> {
   try {
     const raw = await fs.promises.readFile(filePath, "utf8")
+    const parsed = JSON.parse(raw) as PluginRuntimeConfig | ProjectPluginOverrides
+    const settings = parsed.settings?.[PLUGIN_NAME] ?? {}
 
-    return `${filePath}:${raw}`
+    return `${filePath}:${stableStringify(settings)}`
   } catch (error) {
     if (isEnoent(error)) return `${filePath}:missing`
 
     return `${filePath}:unreadable`
   }
+}
+
+function stableStringify(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(stableStringify).join(",")}]`
+  }
+
+  if (typeof value === "object" && value !== null) {
+    const entries = Object.entries(value as Record<string, unknown>).sort(([left], [right]) =>
+      left.localeCompare(right),
+    )
+    const parts = entries.map(([key, entry]) => `${JSON.stringify(key)}:${stableStringify(entry)}`)
+
+    return `{${parts.join(",")}}`
+  }
+
+  return JSON.stringify(value)
 }
 
 async function readJsonFile<T>(filePath: string): Promise<T | undefined> {

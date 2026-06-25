@@ -43,23 +43,45 @@ test("loads updated plugin settings from disk", async () => {
   }
 })
 
-test("detects plugin settings file changes", async () => {
+test("detects plugin settings changes and ignores unrelated lockfile changes", async () => {
   const directory = await mkdtemp(path.join(tmpdir(), "developer-cost-signature-"))
   const pluginsLockfile = path.join(directory, "omp-plugins.lock.json")
 
   try {
-    await writePluginSettings(pluginsLockfile, {
-      monthlySalary: 6_500,
+    await writePluginLockfile(pluginsLockfile, {
+      [PLUGIN_NAME]: {
+        monthlySalary: 6_500,
+      },
+      unrelatedPlugin: {
+        enabled: true,
+      },
     })
 
     const firstSignature = await readConfigSignature([pluginsLockfile])
 
-    await writePluginSettings(pluginsLockfile, {
-      monthlySalary: 9_000,
+    await writePluginLockfile(pluginsLockfile, {
+      [PLUGIN_NAME]: {
+        monthlySalary: 6_500,
+      },
+      unrelatedPlugin: {
+        enabled: false,
+      },
+    })
+
+    const unrelatedSignature = await readConfigSignature([pluginsLockfile])
+
+    await writePluginLockfile(pluginsLockfile, {
+      [PLUGIN_NAME]: {
+        monthlySalary: 9_000,
+      },
+      unrelatedPlugin: {
+        enabled: false,
+      },
     })
 
     const secondSignature = await readConfigSignature([pluginsLockfile])
 
+    assert.equal(unrelatedSignature, firstSignature)
     assert.notEqual(secondSignature, firstSignature)
   } finally {
     await rm(directory, { recursive: true, force: true })
@@ -70,10 +92,17 @@ async function writePluginSettings(
   filePath: string,
   settings: Record<string, unknown>,
 ): Promise<void> {
+  await writePluginLockfile(filePath, {
+    [PLUGIN_NAME]: settings,
+  })
+}
+
+async function writePluginLockfile(
+  filePath: string,
+  settings: Record<string, Record<string, unknown>>,
+): Promise<void> {
   const content = JSON.stringify({
-    settings: {
-      [PLUGIN_NAME]: settings,
-    },
+    settings,
   })
 
   await writeFile(filePath, content)

@@ -81,20 +81,8 @@ export function refreshIntervalMs(config: DeveloperCostConfig): number {
   return config.refreshIntervalSeconds * MS_PER_MINUTE / MINUTES_PER_HOUR
 }
 
-export function displayedDeveloperCost(
-  state: DeveloperCostState,
-  nowMs: number,
-  config: DeveloperCostConfig,
-): number {
-  if (state.activeStartAtMs === undefined || state.activeUntilMs === undefined) {
-    return state.totalCost
-  }
-
-  const elapsedMs = Math.max(0, Math.min(nowMs, state.activeUntilMs) - state.activeStartAtMs)
-  const activeWindowCount = elapsedMs / activeWindowMs(config)
-  const unpaidWindowCount = Math.max(0, activeWindowCount - state.billedWindows)
-
-  return state.totalCost + unpaidWindowCount * windowRate(config)
+export function displayedDeveloperCost(state: DeveloperCostState): number {
+  return state.totalCost
 }
 
 export function settleDeveloperCostState(
@@ -108,7 +96,10 @@ export function settleDeveloperCostState(
     return nextState
   }
 
-  const elapsedMs = Math.max(0, Math.min(nowMs, nextState.activeUntilMs) - nextState.activeStartAtMs)
+  const elapsedMs = Math.max(
+    0,
+    Math.min(nowMs, nextState.activeUntilMs) - nextState.activeStartAtMs,
+  )
   const settledWindowCount = Math.floor(elapsedMs / activeWindowMs(config))
   const newWindowCount = Math.max(0, settledWindowCount - nextState.billedWindows)
 
