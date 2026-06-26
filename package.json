@@ -1,12 +1,14 @@
 {
   "name": "omp-developer-cost-status",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Developer time cost status line plugin for OMP.",
   "type": "module",
   "license": "MIT",
   "files": [
     "src",
+    "spec",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "scripts": {
@@ -79,5 +81,8 @@
     "@types/node": "^24.0.0",
     "tsx": "^4.20.6",
     "typescript": "^5.8.2"
+  },
+  "engines": {
+    "node": ">=20.6.0"
   }
 }

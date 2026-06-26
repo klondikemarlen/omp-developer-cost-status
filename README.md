@@ -23,15 +23,8 @@ Canonical feature requirements live in [`spec/developer-cost-status.yml`](spec/d
 - **Session-scoped meter:** Billing is keyed to the current top-level session id. Resume the same
   session and the meter continues.
 - **Top-level only:** Subagent and artifact sessions do not get their own developer meter.
-- **Spread billing (spec):** If the user is active in multiple top-level sessions during the same
-  time span, the developer cost should be divided across those sessions instead of being
-  double-counted.
-
-## Current implementation note
-
-The spread-billing rule above is documented as the intended spec. The current plugin implementation
-still tracks each top-level session independently; simultaneous active top-level sessions are
-**not** yet shared or prorated.
+- **0.8 scope:** Each top-level session is tracked independently. Multi-session spread billing is a
+  planned roadmap item, not part of the implemented 0.8 contract.
 
 ## Behavior
 
@@ -136,6 +129,14 @@ After install, restart OMP if it is already running, or run `/reload-plugins`.
 
 Then run `/developer-cost-status` once to confirm the extension loaded.
 
+## Runtime support
+
+- Node.js: `>=20.6.0`
+- OMP: tested against `@oh-my-pi/pi-coding-agent` `^16.1.16`
+
+The package ships its canonical spec in `spec/developer-cost-status.yml` so installed artifacts carry
+the same behavior contract as the repository.
+
 ## Configure plugin settings
 
 Inspect current settings:
@@ -178,6 +179,7 @@ It shows the current meter total for the active top-level session.
 npm install
 npm test
 npm run build
+npm pack --dry-run
 ```
 
 ## Troubleshooting
