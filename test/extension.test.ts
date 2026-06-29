@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import test from "node:test"
+import { mock, test } from "node:test"
 
 import { parseDeveloperCostConfig } from "../src/billing/parse-developer-cost-config.js"
 import type { ConfigLoader } from "../src/extension-types.js"
@@ -27,6 +27,53 @@ test("records prompts and status for top-level sessions", async () => {
   assert.equal(runtime.entries.length, 1)
   assert.equal(runtime.entries[0]?.customType, DEVELOPER_COST_STATE_ENTRY)
   assert.equal(runtime.statusText, "dim:$0.00 (dev)")
+})
+
+test("feature scenario tracks visible developer cost across prompts and idle time", async () => {
+  const start = Date.UTC(2026, 0, 1, 12, 0, 0)
+  let nowMs = start
+  const runtime = createExtensionRuntime({
+    loadConfig: async () =>
+      parseDeveloperCostConfig({
+        monthlySalary: 100_000 / 12,
+        hoursPerWeek: 35,
+        weeksPerYear: 52,
+        activeWindowMinutes: 5,
+        refreshIntervalSeconds: 60,
+      }),
+  })
+  const ctx = createContext(runtime, { parentSession: undefined })
+  mock.method(Date, "now", () => nowMs)
+  const setNow = (nextNowMs: number) => {
+    nowMs = nextNowMs
+  }
+
+  try {
+    setNow(start)
+    await runtime.handlers.get("before_agent_start")?.({ prompt: "first prompt" } as never, ctx as never)
+    assert.equal(runtime.statusText, "dim:$0.00 (dev)")
+
+    setNow(start + 2 * 60 * 1000)
+    await runtime.handlers.get("turn_end")?.({ type: "turn_end" } as never, ctx as never)
+    assert.equal(runtime.statusText, "dim:$1.83 (dev)")
+
+    setNow(start + 4 * 60 * 1000)
+    await runtime.handlers.get("before_agent_start")?.({ prompt: "follow-up prompt" } as never, ctx as never)
+    assert.equal(runtime.statusText, "dim:$3.66 (dev)")
+
+    setNow(start + 9 * 60 * 1000)
+    await runtime.handlers.get("turn_end")?.({ type: "turn_end" } as never, ctx as never)
+    assert.equal(runtime.statusText, "dim:$8.24 (dev)")
+
+    setNow(start + 10 * 60 * 1000)
+    await runtime.commands.get("developer-cost-status")?.handler("", ctx as never)
+    assert.deepEqual(runtime.notifications.at(-1), {
+      message: "$8.24 (dev)",
+      type: "info",
+    })
+  } finally {
+    mock.restoreAll()
+  }
 })
 
 test("passes context cwd to the config loader", async () => {
