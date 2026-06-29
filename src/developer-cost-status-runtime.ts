@@ -1,7 +1,10 @@
-import { Billing } from "./billing/index.js"
-import type {
-  DeveloperCostConfig,
-  DeveloperCostState,
+import {
+  parseDeveloperCostConfig,
+  recordDeveloperPrompt,
+  refreshIntervalMs,
+  settleDeveloperCostState,
+  type DeveloperCostConfig,
+  type DeveloperCostState,
 } from "./billing/index.js"
 import { loadDeveloperCostConfig } from "./load-developer-cost-config.js"
 import {
@@ -22,8 +25,7 @@ import type {
   ExtensionOptions,
 } from "./extension-types.js"
 
-const billing = Billing.instance
-const DEFAULT_REFRESH_INTERVAL_MS = billing.refreshIntervalMs(billing.parseConfig())
+const DEFAULT_REFRESH_INTERVAL_MS = refreshIntervalMs(parseDeveloperCostConfig())
 
 type RefreshTimer = NodeJS.Timeout
 
@@ -86,7 +88,7 @@ export class DeveloperCostStatusRuntime {
 
     const sessionId = ctx.sessionManager.getSessionId()
     const state = this.stateForSession(ctx, sessionId)
-    const settledState = billing.settleState(state, Date.now(), config)
+    const settledState = settleDeveloperCostState(state, Date.now(), config)
 
     ctx.ui.notify(statusText(settledState, config), "info")
   }
@@ -102,7 +104,7 @@ export class DeveloperCostStatusRuntime {
 
     const sessionId = ctx.sessionManager.getSessionId()
     const state = loadPersistedDeveloperCostState(ctx.sessionManager.getEntries())
-    const settledState = billing.settleState(state, Date.now(), config)
+    const settledState = settleDeveloperCostState(state, Date.now(), config)
 
     this.sessionStates.set(sessionId, settledState)
     this.rememberActiveSession(ctx, sessionId, settledState)
@@ -126,14 +128,14 @@ export class DeveloperCostStatusRuntime {
     const sessionId = ctx.sessionManager.getSessionId()
     const currentState = this.stateForSession(ctx, sessionId)
     const promptAtMs = Date.now()
-    const nextState = billing.recordPrompt(currentState, promptAtMs, config)
+    const nextState = recordDeveloperPrompt(currentState, promptAtMs, config)
 
     this.sessionStates.set(sessionId, nextState)
     this.runtimeState.activeContext = ctx
     this.runtimeState.activeSessionId = sessionId
 
     this.pi.appendEntry(DEVELOPER_COST_STATE_ENTRY, nextState)
-    updateStatus(ctx, billing.settleState(nextState, promptAtMs, config), config)
+    updateStatus(ctx, settleDeveloperCostState(nextState, promptAtMs, config), config)
   }
 
   private async settleCurrentTurn(ctx: ExtensionContext): Promise<void> {
@@ -147,7 +149,7 @@ export class DeveloperCostStatusRuntime {
 
     const sessionId = ctx.sessionManager.getSessionId()
     const currentState = this.stateForSession(ctx, sessionId)
-    const settledState = billing.settleState(currentState, Date.now(), config)
+    const settledState = settleDeveloperCostState(currentState, Date.now(), config)
 
     this.sessionStates.set(sessionId, settledState)
     this.pi.appendEntry(DEVELOPER_COST_STATE_ENTRY, settledState)
@@ -180,14 +182,14 @@ export class DeveloperCostStatusRuntime {
     }
 
     const currentState = this.stateForSession(activeContext, activeSessionId)
-    const settledState = billing.settleState(currentState, Date.now(), config)
+    const settledState = settleDeveloperCostState(currentState, Date.now(), config)
 
     this.sessionStates.set(activeSessionId, settledState)
     this.pi.appendEntry(DEVELOPER_COST_STATE_ENTRY, settledState)
     this.rememberActiveSession(activeContext, activeSessionId, settledState)
     updateStatus(activeContext, settledState, config)
 
-    return billing.refreshIntervalMs(config)
+    return refreshIntervalMs(config)
   }
 
   private scheduleNextRefresh(waitMs = DEFAULT_REFRESH_INTERVAL_MS): void {
