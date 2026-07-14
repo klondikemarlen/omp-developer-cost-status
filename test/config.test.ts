@@ -102,6 +102,23 @@ test("throws when a config file is malformed", async () => {
   }
 })
 
+test("rejects a decoded config document with invalid settings", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "developer-cost-config-"))
+  const pluginsLockfile = path.join(directory, "omp-plugins.lock.json")
+  const projectOverrides = path.join(directory, "plugin-overrides.json")
+
+  try {
+    await writeFile(pluginsLockfile, JSON.stringify({ settings: [] }))
+
+    await assert.rejects(
+      loadDeveloperCostConfigFromFiles(pluginsLockfile, projectOverrides),
+      /settings must be an object/,
+    )
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
 async function writePluginSettings(
   filePath: string,
   settings: Record<string, unknown>,

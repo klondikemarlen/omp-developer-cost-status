@@ -1,23 +1,22 @@
 import { parseDeveloperCostConfig } from "../../billing/index.js";
-import { PLUGIN_NAME } from "../../config/plugin-name.js";
 import { readDeveloperCostConfigFile } from "../../config/loader/read-developer-cost-config-file.js";
-import { settingsForPlugin } from "../../config/settings-for-plugin.js";
+import { parsePluginConfig } from "../../config/parse-plugin-config.js";
+import { resolveDeveloperCostOptions } from "../../config/resolve-developer-cost-options.js";
 
 export async function loadDeveloperCostConfigFromFiles(
   pluginsLockfile,
   projectPluginOverrides,
 ) {
-  const [runtimeConfig, projectOverrides] = await Promise.all([
+  const [rawGlobalConfig, rawProjectConfig] = await Promise.all([
     readDeveloperCostConfigFile(pluginsLockfile),
     readDeveloperCostConfigFile(projectPluginOverrides),
   ]);
-  const globalSettings = settingsForPlugin(runtimeConfig, PLUGIN_NAME);
-  const projectSettings = settingsForPlugin(projectOverrides, PLUGIN_NAME);
-  const mergedSettings = {
-    ...globalSettings,
-    ...projectSettings,
-  };
-  return parseDeveloperCostConfig(mergedSettings);
+  return parseDeveloperCostConfig(
+    resolveDeveloperCostOptions(
+      parsePluginConfig(rawGlobalConfig),
+      parsePluginConfig(rawProjectConfig),
+    ),
+  );
 }
 
 export default loadDeveloperCostConfigFromFiles;

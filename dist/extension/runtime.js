@@ -4,26 +4,20 @@ import {
   billableSummaryText,
   billableWorkEntryPreview,
 } from "../billable-time/presentation.js";
-import {
-  parseDeveloperCostConfig,
-  serializeDeveloperCostState,
-} from "../billing/index.js";
+import { parseDeveloperCostConfig } from "../billing/index.js";
 import { MS_PER_SECOND } from "../billing/calculation/time-constants.js";
 import { SpreadBillingLedger } from "../billing/infrastructure/spread-ledger.js";
 import { loadDeveloperCostConfig } from "../config/loader/load-developer-cost-config.js";
 import { AutomaticTimeLogRecorder } from "../time-log/recorder.js";
 import { errorMessage } from "../utils/error-message.js";
 import path from "node:path";
-import {
-  DEVELOPER_COST_STATE_ENTRY,
-  loadPersistedDeveloperCostState,
-} from "../extension/session-state.js";
 import { isTopLevelSession } from "../extension/session-classification.js";
 import {
   defaultProjectTimeDataRoot,
   migrateProjectTimeDataRoot,
   prepareProjectTimeDataRoot,
 } from "../extension/local-data-root.js";
+import { SessionStateCoordinator } from "../extension/application/session-state-coordinator.js";
 import {
   clearStatus,
   summaryText,
@@ -36,9 +30,7 @@ export class ProjectTimeRuntime {
 
   loadConfig;
 
-  ledger;
-
-  timeLogRecorder;
+  sessionStateCoordinator;
 
   billableTimeRecorder;
 
@@ -53,8 +45,6 @@ export class ProjectTimeRuntime {
   billableSessionIds = new Set();
 
   runtimeState = {};
-
-  sessionStates = new Map();
 
   static refreshIntervalMs(config) {
     return config.refreshIntervalSeconds * MS_PER_SECOND;
@@ -73,11 +63,16 @@ export class ProjectTimeRuntime {
       options.ledgerPath === undefined ||
       options.timeLogPath === undefined ||
       options.billableTimePath === undefined;
-    this.ledger = new SpreadBillingLedger(
+    const ledger = new SpreadBillingLedger(
       options.ledgerPath ?? path.join(dataRoot, "spread-billing.json"),
     );
-    this.timeLogRecorder = new AutomaticTimeLogRecorder(
+    const timeLogRecorder = new AutomaticTimeLogRecorder(
       options.timeLogPath ?? path.join(dataRoot, "time-log.json"),
+    );
+    this.sessionStateCoordinator = new SessionStateCoordinator(
+      ledger,
+      timeLogRecorder,
+      (customType, data) => this.pi.appendEntry(customType, data),
     );
     this.billableTimeRecorder = new BillableTimeRecorder(
       options.billableTimePath ?? dataRoot,
@@ -170,16 +165,16 @@ export class ProjectTimeRuntime {
     const config = await this.loadConfigForStatus(ctx);
     if (config === undefined) return;
     const sessionId = ctx.sessionManager.getSessionId();
-    const state = this.stateForSession(ctx, sessionId);
     const nowMs = Date.now();
-    const settledState = await this.settleAndRecord(
-      ctx,
-      sessionId,
-      state,
-      nowMs,
+    const settledState = await this.sessionStateCoordinator.settle({
       config,
-    );
-    this.sessionStates.set(sessionId, settledState);
+      cwd: ctx.cwd,
+      entries: ctx.sessionManager.getEntries(),
+      nowMs,
+      sessionId,
+      notifyTimeLogError: (message) =>
+        ctx.ui.notify(`Developer time log error: ${message}`, "error"),
+    });
     const message =
       args.trim() === "summary"
         ? summaryText(settledState, config, sessionId, nowMs)
@@ -195,17 +190,15 @@ export class ProjectTimeRuntime {
       return;
     }
     const sessionId = ctx.sessionManager.getSessionId();
-    const state = loadPersistedDeveloperCostState(
-      ctx.sessionManager.getEntries(),
-    );
-    const settledState = await this.settleAndRecord(
-      ctx,
-      sessionId,
-      state,
-      Date.now(),
+    const settledState = await this.sessionStateCoordinator.settle({
       config,
-    );
-    this.sessionStates.set(sessionId, settledState);
+      cwd: ctx.cwd,
+      entries: ctx.sessionManager.getEntries(),
+      nowMs: Date.now(),
+      sessionId,
+      notifyTimeLogError: (message) =>
+        ctx.ui.notify(`Developer time log error: ${message}`, "error"),
+    });
     this.rememberActiveSession(ctx, sessionId, settledState);
     if (settledState.activeUntilMs === undefined) {
       this.clearActiveStatus(ctx);
@@ -222,8 +215,6 @@ export class ProjectTimeRuntime {
       return;
     }
     const sessionId = ctx.sessionManager.getSessionId();
-    const currentState = this.stateForSession(ctx, sessionId);
-    const stateBeforePrompt = { ...currentState };
     const promptAtMs = Date.now();
     try {
       const result = await this.billableTimeRecorder.recordPrompt(
@@ -238,27 +229,15 @@ export class ProjectTimeRuntime {
     } catch (error) {
       ctx.ui.notify(`Billable time error: ${errorMessage(error)}`, "error");
     }
-    const nextState = await this.ledger.recordPrompt(
-      sessionId,
-      currentState,
-      promptAtMs,
+    const nextState = await this.sessionStateCoordinator.recordPrompt({
       config,
-    );
-    this.recordTimeLogSettlement(
-      ctx,
+      cwd: ctx.cwd,
+      entries: ctx.sessionManager.getEntries(),
+      nowMs: promptAtMs,
       sessionId,
-      stateBeforePrompt,
-      nextState,
-      promptAtMs,
-    );
-    this.timeLogRecorder.recordPromptStart(sessionId, ctx.cwd, promptAtMs);
-    this.sessionStates.set(sessionId, nextState);
-    this.runtimeState.activeContext = ctx;
-    this.runtimeState.activeSessionId = sessionId;
-    this.pi.appendEntry(
-      DEVELOPER_COST_STATE_ENTRY,
-      serializeDeveloperCostState(nextState),
-    );
+      notifyTimeLogError: (message) =>
+        ctx.ui.notify(`Developer time log error: ${message}`, "error"),
+    });
     updateStatus(ctx, nextState, config);
   }
 
@@ -282,19 +261,15 @@ export class ProjectTimeRuntime {
       this.clearActiveStatus(ctx);
       return;
     }
-    const currentState = this.stateForSession(ctx, sessionId);
-    const settledState = await this.settleAndRecord(
-      ctx,
-      sessionId,
-      currentState,
-      Date.now(),
+    const settledState = await this.sessionStateCoordinator.settle({
       config,
-    );
-    this.sessionStates.set(sessionId, settledState);
-    this.pi.appendEntry(
-      DEVELOPER_COST_STATE_ENTRY,
-      serializeDeveloperCostState(settledState),
-    );
+      cwd: ctx.cwd,
+      entries: ctx.sessionManager.getEntries(),
+      nowMs: Date.now(),
+      sessionId,
+      notifyTimeLogError: (message) =>
+        ctx.ui.notify(`Developer time log error: ${message}`, "error"),
+    });
     this.rememberActiveSession(ctx, sessionId, settledState);
     updateStatus(ctx, settledState, config);
   }
@@ -315,10 +290,9 @@ export class ProjectTimeRuntime {
     if (isTopLevelSession(ctx.sessionManager)) {
       await this.settleCurrentTurn(ctx, false);
     }
-    await this.timeLogRecorder.flush(sessionId, (message) =>
+    await this.sessionStateCoordinator.flush(sessionId, (message) =>
       ctx.ui.notify(`Developer time log error: ${message}`, "error"),
     );
-    this.sessionStates.delete(sessionId);
     this.billableSessionIds.delete(sessionId);
     if (this.runtimeState.activeSessionId !== sessionId) return;
     this.clearActiveStatus(ctx);
@@ -338,19 +312,18 @@ export class ProjectTimeRuntime {
       this.clearActiveStatus(activeContext);
       return ProjectTimeRuntime.defaultRefreshIntervalMs;
     }
-    const currentState = this.stateForSession(activeContext, activeSessionId);
-    const settledState = await this.settleAndRecord(
-      activeContext,
-      activeSessionId,
-      currentState,
-      Date.now(),
+    const settledState = await this.sessionStateCoordinator.settle({
       config,
-    );
-    this.sessionStates.set(activeSessionId, settledState);
-    this.pi.appendEntry(
-      DEVELOPER_COST_STATE_ENTRY,
-      serializeDeveloperCostState(settledState),
-    );
+      cwd: activeContext.cwd,
+      entries: activeContext.sessionManager.getEntries(),
+      nowMs: Date.now(),
+      sessionId: activeSessionId,
+      notifyTimeLogError: (message) =>
+        activeContext.ui.notify(
+          `Developer time log error: ${message}`,
+          "error",
+        ),
+    });
     this.rememberActiveSession(activeContext, activeSessionId, settledState);
     updateStatus(activeContext, settledState, config);
     return ProjectTimeRuntime.refreshIntervalMs(config);
@@ -436,44 +409,6 @@ export class ProjectTimeRuntime {
     }
   }
 
-  async settleAndRecord(ctx, sessionId, state, nowMs, config) {
-    const stateBeforeSettlement = { ...state };
-    const settledState = await this.ledger.settle(
-      sessionId,
-      stateBeforeSettlement,
-      nowMs,
-      config,
-    );
-    this.recordTimeLogSettlement(
-      ctx,
-      sessionId,
-      stateBeforeSettlement,
-      settledState,
-      nowMs,
-    );
-    return settledState;
-  }
-
-  recordTimeLogSettlement(
-    ctx,
-    sessionId,
-    stateBeforeSettlement,
-    settledState,
-    nowMs,
-  ) {
-    this.timeLogRecorder.recordSettlement(
-      {
-        cwd: ctx.cwd,
-        nowMs,
-        sessionId,
-        stateBeforeSettlement,
-        settledState,
-      },
-      (message) =>
-        ctx.ui.notify(`Developer time log error: ${message}`, "error"),
-    );
-  }
-
   rememberActiveSession(ctx, sessionId, state) {
     if (state.activeUntilMs === undefined) {
       this.runtimeState.activeContext = undefined;
@@ -488,12 +423,5 @@ export class ProjectTimeRuntime {
     clearStatus(ctx);
     this.runtimeState.activeContext = undefined;
     this.runtimeState.activeSessionId = undefined;
-  }
-
-  stateForSession(ctx, sessionId) {
-    return (
-      this.sessionStates.get(sessionId) ??
-      loadPersistedDeveloperCostState(ctx.sessionManager.getEntries())
-    );
   }
 }
