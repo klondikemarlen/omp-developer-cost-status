@@ -1,16 +1,22 @@
-import { createHash, randomUUID } from "node:crypto"
+import { randomUUID } from "node:crypto"
 import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import path from "node:path"
 import { lock } from "@/vendor/proper-lockfile.js"
 import { exportTimeEntries } from "@/time-log/domain/summary.js"
-import { parseTimeLogEntry } from "@/time-log/domain/parse-entry.js"
-import type { AutomaticTimeLogInput, TimeLogEntry } from "@/time-log/domain/model.js"
-export type { AutomaticTimeLogInput, TimeLogEntry } from "@/time-log/domain/model.js"
-
-type TimeLogState = {
-  entries: TimeLogEntry[]
-}
+import { recordAutomaticTimeLogEntry } from "@/time-log/domain/record-automatic-entry.js"
+import {
+  parseTimeLogState,
+  type TimeLogState,
+} from "@/time-log/infrastructure/state-mapper.js"
+import type {
+  AutomaticTimeLogInput,
+  TimeLogEntry,
+} from "@/time-log/domain/model.js"
+export type {
+  AutomaticTimeLogInput,
+  TimeLogEntry,
+} from "@/time-log/domain/model.js"
 
 export class TimeLogLedger {
   private readonly filePath: string
@@ -31,27 +37,17 @@ export class TimeLogLedger {
   }
 
   async recordAutomatic(input: AutomaticTimeLogInput): Promise<TimeLogEntry> {
-    const entry = createTimeLogEntry(input)
-
     return this.withLock(async () => {
       const state = await this.readState()
-      const existingIndex = state.entries.findIndex((candidate) => candidate.id === entry.id)
-      if (existingIndex !== -1) {
-        const existingEntry = state.entries[existingIndex]
-        if (entry.endAtMs > existingEntry.endAtMs) {
-          const extendedEntry = { ...existingEntry, endAtMs: entry.endAtMs }
-          state.entries[existingIndex] = extendedEntry
-          await this.writeState(state)
-          return extendedEntry
-        }
+      const recorded = recordAutomaticTimeLogEntry(state.entries, input)
 
+      if (recorded.changed) {
+        await this.writeState(state)
+      } else {
         await this.writeSummary(state)
-        return existingEntry
       }
 
-      state.entries.push(entry)
-      await this.writeState(state)
-      return entry
+      return recorded.entry
     })
   }
 
@@ -99,7 +95,11 @@ export class TimeLogLedger {
     try {
       content = await readFile(this.filePath, "utf8")
     } catch (error) {
-      if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+      if (
+        error instanceof Error &&
+        "code" in error &&
+        error.code === "ENOENT"
+      ) {
         return { entries: [] }
       }
 
@@ -132,39 +132,4 @@ export class TimeLogLedger {
     await writeFile(temporaryPath, content, { mode: 0o600 })
     await rename(temporaryPath, this.summaryPath)
   }
-}
-
-function createTimeLogEntry(input: AutomaticTimeLogInput): TimeLogEntry {
-  const project = input.project.trim()
-  const repositoryId = input.repositoryId.trim()
-  const sourceKey = input.sourceKey.trim()
-  const startAtMs = input.startAtMs
-  const endAtMs = input.endAtMs
-
-  if (project.length === 0) throw new Error("Time log project is required.")
-  if (repositoryId.length === 0) throw new Error("Time log repository identity is required.")
-  if (sourceKey.length === 0) throw new Error("Time log source key is required.")
-  if (!Number.isFinite(startAtMs) || !Number.isFinite(endAtMs) || startAtMs >= endAtMs) {
-    throw new Error("Time log timestamps must define a positive interval.")
-  }
-
-  const id = `auto-${createHash("sha256").update(sourceKey).digest("hex")}`
-  const createdAtMs = Date.now()
-
-  return { id, project, repositoryId, startAtMs, endAtMs, createdAtMs }
-}
-
-function parseTimeLogState(value: unknown): TimeLogState | undefined {
-  if (typeof value !== "object" || value === null || !("entries" in value) || !Array.isArray(value.entries)) {
-    return undefined
-  }
-
-  const entries: TimeLogEntry[] = []
-  for (const valueEntry of value.entries) {
-    const entry = parseTimeLogEntry(valueEntry)
-    if (entry === undefined) return undefined
-    entries.push(entry)
-  }
-
-  return { entries }
 }

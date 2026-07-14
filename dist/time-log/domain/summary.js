@@ -11,11 +11,21 @@ export function exportTimeEntries(entries) {
 
 export function summarizeTimeEntries(entries, compactionMinutes) {
   const bucketMilliseconds = compactionMilliseconds(compactionMinutes);
-  const allocationMilliseconds = entries.reduce(
+  return {
+    allocationMilliseconds: allocatedMilliseconds(entries),
+    wallClockMilliseconds: wallClockMilliseconds(entries),
+    rows: compactRows(entries, bucketMilliseconds),
+  };
+}
+
+function allocatedMilliseconds(entries) {
+  return entries.reduce(
     (total, entry) => total + entry.endAtMs - entry.startAtMs,
     0,
   );
-  const wallClockMilliseconds = unionMilliseconds(entries);
+}
+
+function compactRows(entries, bucketMilliseconds) {
   const rowsByKey = new Map();
   for (const entry of entries) {
     let segmentStartAtMs = entry.startAtMs;
@@ -26,7 +36,7 @@ export function summarizeTimeEntries(entries, compactionMinutes) {
         entry.endAtMs,
         bucketStartAtMs + bucketMilliseconds,
       );
-      const segmentAllocationMilliseconds = segmentEndAtMs - segmentStartAtMs;
+      const allocationMilliseconds = segmentEndAtMs - segmentStartAtMs;
       const date = new Date(bucketStartAtMs).toISOString().slice(0, 10);
       const key = `${bucketStartAtMs}:${entry.repositoryId}`;
       const existingRow = rowsByKey.get(key);
@@ -36,16 +46,15 @@ export function summarizeTimeEntries(entries, compactionMinutes) {
           date,
           project: entry.project,
           repositoryId: entry.repositoryId,
-          allocationMilliseconds: segmentAllocationMilliseconds,
+          allocationMilliseconds,
         });
       } else {
-        existingRow.allocationMilliseconds += segmentAllocationMilliseconds;
+        existingRow.allocationMilliseconds += allocationMilliseconds;
       }
       segmentStartAtMs = segmentEndAtMs;
     }
   }
-  const rows = [...rowsByKey.values()].sort(compareRows);
-  return { allocationMilliseconds, wallClockMilliseconds, rows };
+  return [...rowsByKey.values()].sort(compareRows);
 }
 
 function compactionMilliseconds(compactionMinutes) {
@@ -59,7 +68,7 @@ function compactionMilliseconds(compactionMinutes) {
   return compactionMinutes * 60 * 1_000;
 }
 
-function unionMilliseconds(entries) {
+function wallClockMilliseconds(entries) {
   const intervals = [...entries].sort(
     (left, right) => left.startAtMs - right.startAtMs,
   );

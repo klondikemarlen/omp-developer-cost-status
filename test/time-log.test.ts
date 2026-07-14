@@ -9,6 +9,7 @@ import Big from "big.js"
 import { TimeLogLedger } from "../src/time-log/infrastructure/ledger.js"
 import type { TimeLogEntry } from "../src/time-log/domain/model.js"
 import { createAutomaticTimeLogEntry } from "../src/time-log/domain/create-automatic-entry.js"
+import { recordAutomaticTimeLogEntry } from "../src/time-log/domain/record-automatic-entry.js"
 import { lock } from "../src/vendor/proper-lockfile.js"
 
 const minute = 60_000
@@ -80,6 +81,34 @@ function assertEntries(entries: readonly TimeLogEntry[], expected: readonly Expe
     expected,
   )
 }
+
+test("extends automatic entries by source key in the domain", () => {
+  const entries: TimeLogEntry[] = []
+  const first = recordAutomaticTimeLogEntry(entries, {
+    project: "github.com/acme/alpha",
+    repositoryId: "repo-alpha",
+    sourceKey: "activity-2026-01-01T00:00:00Z",
+    startAtMs: start,
+    endAtMs: start + minute,
+  }, start)
+  const extended = recordAutomaticTimeLogEntry(entries, {
+    project: "github.com/acme/alpha",
+    repositoryId: "repo-alpha",
+    sourceKey: "activity-2026-01-01T00:00:00Z",
+    startAtMs: start + 2 * minute,
+    endAtMs: start + 3 * minute,
+  }, start + minute)
+
+  assert.equal(first.changed, true)
+  assert.equal(extended.changed, true)
+  assert.equal(extended.entry.id, first.entry.id)
+  assertEntries(entries, [{
+    project: "github.com/acme/alpha",
+    repositoryId: "repo-alpha",
+    startAtMs: start,
+    endAtMs: start + 3 * minute,
+  }])
+})
 
 test("suppresses automatic intervals deterministically by source key", async () => {
   await withLedger(async (ledger) => {

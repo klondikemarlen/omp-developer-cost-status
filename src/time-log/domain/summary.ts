@@ -30,19 +30,36 @@ export function summarizeTimeEntries(
   compactionMinutes: number,
 ): TimeLogSummary {
   const bucketMilliseconds = compactionMilliseconds(compactionMinutes)
-  const allocationMilliseconds = entries.reduce(
+  return {
+    allocationMilliseconds: allocatedMilliseconds(entries),
+    wallClockMilliseconds: wallClockMilliseconds(entries),
+    rows: compactRows(entries, bucketMilliseconds),
+  }
+}
+
+function allocatedMilliseconds(entries: readonly TimeLogEntry[]): number {
+  return entries.reduce(
     (total, entry) => total + entry.endAtMs - entry.startAtMs,
     0,
   )
-  const wallClockMilliseconds = unionMilliseconds(entries)
+}
+
+function compactRows(
+  entries: readonly TimeLogEntry[],
+  bucketMilliseconds: number,
+): CompactedTimeLogRow[] {
   const rowsByKey = new Map<string, CompactedTimeLogRow>()
 
   for (const entry of entries) {
     let segmentStartAtMs = entry.startAtMs
     while (segmentStartAtMs < entry.endAtMs) {
-      const bucketStartAtMs = Math.floor(segmentStartAtMs / bucketMilliseconds) * bucketMilliseconds
-      const segmentEndAtMs = Math.min(entry.endAtMs, bucketStartAtMs + bucketMilliseconds)
-      const segmentAllocationMilliseconds = segmentEndAtMs - segmentStartAtMs
+      const bucketStartAtMs =
+        Math.floor(segmentStartAtMs / bucketMilliseconds) * bucketMilliseconds
+      const segmentEndAtMs = Math.min(
+        entry.endAtMs,
+        bucketStartAtMs + bucketMilliseconds,
+      )
+      const allocationMilliseconds = segmentEndAtMs - segmentStartAtMs
       const date = new Date(bucketStartAtMs).toISOString().slice(0, 10)
       const key = `${bucketStartAtMs}:${entry.repositoryId}`
       const existingRow = rowsByKey.get(key)
@@ -53,30 +70,35 @@ export function summarizeTimeEntries(
           date,
           project: entry.project,
           repositoryId: entry.repositoryId,
-          allocationMilliseconds: segmentAllocationMilliseconds,
+          allocationMilliseconds,
         })
       } else {
-        existingRow.allocationMilliseconds += segmentAllocationMilliseconds
+        existingRow.allocationMilliseconds += allocationMilliseconds
       }
 
       segmentStartAtMs = segmentEndAtMs
     }
   }
 
-  const rows = [...rowsByKey.values()].sort(compareRows)
-  return { allocationMilliseconds, wallClockMilliseconds, rows }
+  return [...rowsByKey.values()].sort(compareRows)
 }
 
 function compactionMilliseconds(compactionMinutes: number): number {
-  if (compactionMinutes !== 5 && compactionMinutes !== 10 && compactionMinutes !== 15) {
+  if (
+    compactionMinutes !== 5 &&
+    compactionMinutes !== 10 &&
+    compactionMinutes !== 15
+  ) {
     throw new Error("Time log compaction must be 5, 10, or 15 minutes.")
   }
 
   return compactionMinutes * 60 * 1_000
 }
 
-function unionMilliseconds(entries: readonly TimeLogEntry[]): number {
-  const intervals = [...entries].sort((left, right) => left.startAtMs - right.startAtMs)
+function wallClockMilliseconds(entries: readonly TimeLogEntry[]): number {
+  const intervals = [...entries].sort(
+    (left, right) => left.startAtMs - right.startAtMs,
+  )
   let totalMilliseconds = 0
   let currentStartAtMs: number | undefined
   let currentEndAtMs: number | undefined
@@ -105,7 +127,10 @@ function unionMilliseconds(entries: readonly TimeLogEntry[]): number {
   return totalMilliseconds
 }
 
-function compareRows(left: CompactedTimeLogRow, right: CompactedTimeLogRow): number {
+function compareRows(
+  left: CompactedTimeLogRow,
+  right: CompactedTimeLogRow,
+): number {
   if (left.bucketStartAtMs !== right.bucketStartAtMs) {
     return left.bucketStartAtMs - right.bucketStartAtMs
   }

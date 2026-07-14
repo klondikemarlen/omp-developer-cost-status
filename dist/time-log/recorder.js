@@ -10,80 +10,46 @@ export class AutomaticTimeLogRecorder {
 
   repositoryLookups = new Map();
 
-  sessionRepositories = new Map();
-
-  writeQueues = new Map();
-
-  pendingEntries = new Map();
+  sessionActivities = new Map();
 
   constructor(timeLogPath) {
     this.ledger = new TimeLogLedger(timeLogPath);
   }
 
   recordPromptStart(sessionId, cwd, promptAtMs) {
-    this.sessionRepositories.set(sessionId, {
-      repository: this.repositoryFor(cwd),
-      startedAtMs: promptAtMs,
-    });
+    this.sessionActivities.set(
+      sessionId,
+      new SessionActivity(this.repositoryFor(cwd), promptAtMs),
+    );
   }
 
   recordSettlement(settlement, notifyError) {
-    const sessionRepository = this.sessionRepositories.get(
-      settlement.sessionId,
-    );
-    const previousWrite =
-      this.writeQueues.get(settlement.sessionId) ?? Promise.resolve();
-    const nextWrite = previousWrite.then(async () => {
-      try {
-        await this.recordAutomaticInterval(settlement, sessionRepository);
+    const activity = this.sessionActivityFor(settlement.sessionId);
+    activity.enqueue(
+      () => this.automaticEntry(settlement, activity),
+      (entry) => this.ledger.recordAutomatic(entry),
+      () => {
         this.lastErrorMessage = undefined;
-      } catch (error) {
-        this.reportError(error, notifyError);
-      }
-    });
-    this.writeQueues.set(settlement.sessionId, nextWrite);
-    void nextWrite.finally(() => {
-      if (this.writeQueues.get(settlement.sessionId) === nextWrite) {
-        this.writeQueues.delete(settlement.sessionId);
-      }
-    });
+      },
+      (error) => this.reportError(error, notifyError),
+    );
   }
 
   async flush(sessionId, notifyError) {
-    await this.writeQueues.get(sessionId);
-    this.writeQueues.delete(sessionId);
-    const pendingEntries = this.pendingEntries.get(sessionId);
-    if (pendingEntries !== undefined) {
-      try {
-        await this.persistPendingEntries(sessionId, pendingEntries);
-        this.lastErrorMessage = undefined;
-      } catch (error) {
-        this.reportError(error, notifyError);
-      }
+    const activity = this.sessionActivities.get(sessionId);
+    if (activity !== undefined) {
+      await activity.flush(
+        (entry) => this.ledger.recordAutomatic(entry),
+        () => {
+          this.lastErrorMessage = undefined;
+        },
+        (error) => this.reportError(error, notifyError),
+      );
     }
-    this.sessionRepositories.delete(sessionId);
+    this.sessionActivities.delete(sessionId);
   }
 
-  async recordAutomaticInterval(settlement, sessionRepository) {
-    const entry = await this.automaticEntry(settlement, sessionRepository);
-    if (entry === undefined) return;
-    const pendingEntries =
-      this.pendingEntries.get(settlement.sessionId) ?? new Map();
-    const previousEntry = pendingEntries.get(entry.sourceKey);
-    const entryToPersist =
-      previousEntry === undefined
-        ? entry
-        : {
-            ...entry,
-            startAtMs: Math.min(previousEntry.startAtMs, entry.startAtMs),
-            endAtMs: Math.max(previousEntry.endAtMs, entry.endAtMs),
-          };
-    pendingEntries.set(entry.sourceKey, entryToPersist);
-    this.pendingEntries.set(settlement.sessionId, pendingEntries);
-    await this.persistPendingEntries(settlement.sessionId, pendingEntries);
-  }
-
-  async automaticEntry(settlement, sessionRepository) {
+  async automaticEntry(settlement, activity) {
     const stateBeforeSettlement = settlement.stateBeforeSettlement;
     if (
       stateBeforeSettlement.activeStartAtMs === undefined ||
@@ -95,15 +61,10 @@ export class AutomaticTimeLogRecorder {
       settlement.settledState.activeMilliseconds -
       stateBeforeSettlement.activeMilliseconds;
     if (settledMilliseconds <= 0) return undefined;
-    const repository = await this.repositoryForSettlement(
-      settlement,
-      sessionRepository,
-    );
+    const repository = await this.repositoryForSettlement(settlement, activity);
     if (repository === undefined) return undefined;
     const sourceStartedAtMs =
-      sessionRepository?.startedAtMs ??
-      settlement.stateBeforeSettlement.activeStartAtMs;
-    if (sourceStartedAtMs === undefined) return undefined;
+      activity.startedAtMs ?? stateBeforeSettlement.activeStartAtMs;
     return createAutomaticTimeLogEntry({
       nowMs: settlement.nowMs,
       repository,
@@ -114,18 +75,16 @@ export class AutomaticTimeLogRecorder {
     });
   }
 
-  async repositoryForSettlement(settlement, sessionRepository) {
-    return sessionRepository?.repository ?? this.repositoryFor(settlement.cwd);
+  async repositoryForSettlement(settlement, activity) {
+    return activity.repository ?? this.repositoryFor(settlement.cwd);
   }
 
-  async persistPendingEntries(sessionId, entries) {
-    for (const sourceKey of [...entries.keys()]) {
-      const entry = entries.get(sourceKey);
-      if (entry === undefined) continue;
-      await this.ledger.recordAutomatic(entry);
-      entries.delete(sourceKey);
-    }
-    if (entries.size === 0) this.pendingEntries.delete(sessionId);
+  sessionActivityFor(sessionId) {
+    const existingActivity = this.sessionActivities.get(sessionId);
+    if (existingActivity !== undefined) return existingActivity;
+    const activity = new SessionActivity();
+    this.sessionActivities.set(sessionId, activity);
+    return activity;
   }
 
   reportError(error, notifyError) {
@@ -149,5 +108,66 @@ export class AutomaticTimeLogRecorder {
       }
     });
     return repository;
+  }
+}
+
+class SessionActivity {
+  repository;
+
+  startedAtMs;
+
+  pendingEntries = new Map();
+
+  writeQueue = Promise.resolve();
+
+  constructor(repository, startedAtMs) {
+    this.repository = repository;
+    this.startedAtMs = startedAtMs;
+  }
+
+  enqueue(createEntry, persist, onSuccess, onError) {
+    this.writeQueue = this.writeQueue.then(async () => {
+      try {
+        const entry = await createEntry();
+        if (entry !== undefined) {
+          this.remember(entry);
+          await this.persistPendingEntries(persist);
+        }
+        onSuccess();
+      } catch (error) {
+        onError(error);
+      }
+    });
+  }
+
+  async flush(persist, onSuccess, onError) {
+    await this.writeQueue;
+    try {
+      await this.persistPendingEntries(persist);
+      onSuccess();
+    } catch (error) {
+      onError(error);
+    }
+  }
+
+  remember(entry) {
+    const previousEntry = this.pendingEntries.get(entry.sourceKey);
+    this.pendingEntries.set(
+      entry.sourceKey,
+      previousEntry === undefined
+        ? entry
+        : {
+            ...entry,
+            startAtMs: Math.min(previousEntry.startAtMs, entry.startAtMs),
+            endAtMs: Math.max(previousEntry.endAtMs, entry.endAtMs),
+          },
+    );
+  }
+
+  async persistPendingEntries(persist) {
+    for (const [sourceKey, entry] of this.pendingEntries) {
+      await persist(entry);
+      this.pendingEntries.delete(sourceKey);
+    }
   }
 }
