@@ -1,3 +1,6 @@
+import { BillableTimeRecorder } from "@/billable-time/recorder.js"
+import { billableSummaryText } from "@/billable-time/presentation.js"
+
 import {
   parseDeveloperCostConfig,
   type DeveloperCostConfig,
@@ -40,6 +43,7 @@ export class DeveloperCostStatusRuntime {
   private readonly loadConfig: ConfigLoader
   private readonly ledger: SpreadBillingLedger
   private readonly timeLogRecorder: AutomaticTimeLogRecorder
+  private readonly billableTimeRecorder: BillableTimeRecorder
   private readonly runtimeState: RuntimeState = {}
   private readonly sessionStates = new Map<string, DeveloperCostState>()
 
@@ -55,6 +59,7 @@ export class DeveloperCostStatusRuntime {
     this.loadConfig = options.loadConfig ?? loadDeveloperCostConfig
     this.ledger = new SpreadBillingLedger(options.ledgerPath)
     this.timeLogRecorder = new AutomaticTimeLogRecorder(options.timeLogPath)
+    this.billableTimeRecorder = new BillableTimeRecorder(options.billableTimePath)
   }
 
   register(): void {
@@ -94,6 +99,15 @@ export class DeveloperCostStatusRuntime {
       return
     }
 
+    if (args.trim() === "billable") {
+      try {
+        const summaries = await this.billableTimeRecorder.summaries()
+        ctx.ui.notify(billableSummaryText(summaries), "info")
+      } catch (error) {
+        ctx.ui.notify(`Billable time error: ${errorMessage(error)}`, "error")
+      }
+      return
+    }
     const config = await this.loadConfigForStatus(ctx)
     if (config === undefined) return
     const sessionId = ctx.sessionManager.getSessionId()
@@ -145,6 +159,11 @@ export class DeveloperCostStatusRuntime {
     const currentState = this.stateForSession(ctx, sessionId)
     const stateBeforePrompt = { ...currentState }
     const promptAtMs = Date.now()
+    try {
+      await this.billableTimeRecorder.recordPrompt(sessionId, ctx.cwd, promptAtMs, config.billableTime)
+    } catch (error) {
+      ctx.ui.notify(`Billable time error: ${errorMessage(error)}`, "error")
+    }
     const nextState = await this.ledger.recordPrompt(
       sessionId,
       currentState,
@@ -161,16 +180,23 @@ export class DeveloperCostStatusRuntime {
     this.pi.appendEntry(DEVELOPER_COST_STATE_ENTRY, nextState)
     updateStatus(ctx, nextState, config)
   }
-
-  private async settleCurrentTurn(ctx: ExtensionContext): Promise<void> {
+  private async settleCurrentTurn(ctx: ExtensionContext, closeBillableInterval = true): Promise<void> {
     if (!isTopLevelSession(ctx.sessionManager)) return
+
+    const sessionId = ctx.sessionManager.getSessionId()
+    if (closeBillableInterval) {
+      try {
+        await this.billableTimeRecorder.recordTurnEnd(sessionId, Date.now())
+      } catch (error) {
+        ctx.ui.notify(`Billable time error: ${errorMessage(error)}`, "error")
+      }
+    }
 
     const config = await this.loadConfigForStatus(ctx)
     if (config === undefined) {
       this.clearActiveStatus(ctx)
       return
     }
-    const sessionId = ctx.sessionManager.getSessionId()
     const currentState = this.stateForSession(ctx, sessionId)
     const settledState = await this.settleAndRecord(
       ctx,
@@ -187,11 +213,16 @@ export class DeveloperCostStatusRuntime {
   }
 
   private async shutdownSession(ctx: ExtensionContext): Promise<void> {
-    if (isTopLevelSession(ctx.sessionManager)) {
-      await this.settleCurrentTurn(ctx)
+    const sessionId = ctx.sessionManager.getSessionId()
+    try {
+      await this.billableTimeRecorder.recordShutdown(sessionId, Date.now())
+    } catch (error) {
+      ctx.ui.notify(`Billable time error: ${errorMessage(error)}`, "error")
     }
 
-    const sessionId = ctx.sessionManager.getSessionId()
+    if (isTopLevelSession(ctx.sessionManager)) {
+      await this.settleCurrentTurn(ctx, false)
+    }
     await this.timeLogRecorder.flush(
       sessionId,
       (message) => ctx.ui.notify(`Developer time log error: ${message}`, "error"),
