@@ -2,11 +2,11 @@ import fs from "node:fs"
 
 import { isEnoent } from "@/utils/is-enoent.js"
 
-export async function readDeveloperCostConfigFile<T>(filePath: string): Promise<T | undefined> {
+export async function readDeveloperCostConfigFile(filePath: string): Promise<unknown | undefined> {
   try {
     const raw = await fs.promises.readFile(filePath, "utf8")
 
-    return JSON.parse(raw) as T
+    return JSON.parse(raw)
   } catch (error) {
     if (isEnoent(error)) return undefined
 
