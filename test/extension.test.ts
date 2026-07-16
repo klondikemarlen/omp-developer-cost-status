@@ -65,7 +65,7 @@ test("persists one attention count for a top-level prompt", async () => {
         },
       },
     ])
-    assert.equal(runtime.statusText, "dim:$0.00 (dev)")
+    assert.equal(runtime.statusText, "dim:CA$0.00 (dev)")
   } finally {
     mock.restoreAll()
   }
@@ -124,7 +124,7 @@ test("shows the active Git project in the default Project Time dashboard", async
       message: [
         "Project Time",
         "Project: Project",
-        "Developer meter: $0.00 (dev)",
+        "Developer meter: CA$0.00 (dev)",
         "Billable policies: not configured",
         "Commands: /project-time summary | /project-time billable | /project-time billable preview | /project-time history",
         "Tip: type /project-time followed by a space to choose a mode.",
@@ -142,7 +142,6 @@ test("uses the current repository as the default billable project target", async
       clients: {
         acme: {
           label: "Acme",
-          currency: "USD",
           attentionRatePerHour: "120",
           aiRatePerHour: "30",
         },
@@ -179,7 +178,7 @@ test("uses the current repository as the default billable project target", async
         message: [
           "Project Time",
           "Project: Project",
-          "Developer meter: $0.00 (dev)",
+          "Developer meter: CA$0.00 (dev)",
           "Billable policies: configured",
           "Commands: /project-time summary | /project-time billable | /project-time billable preview | /project-time history",
           "Tip: type /project-time followed by a space to choose a mode.",
@@ -188,7 +187,7 @@ test("uses the current repository as the default billable project target", async
       })
       await runtime.commands.get("project-time")?.handler("billable", context as never)
       assert.deepEqual(runtime.notifications.at(-1), {
-        message: "Acme / Programming: attention 1 units, 300000ms @ 120 USD/h = 10.00 USD\nAcme / Programming: ai 1 units, 0ms @ 30 USD/h = 0.00 USD",
+        message: "Acme / Programming: attention 1 units, 300000ms @ CA$120/h = CA$10.00\nAcme / Programming: ai 1 units, 0ms @ CA$30/h = CA$0.00",
         type: "info",
       })
 
@@ -255,7 +254,7 @@ test("records billable clocks only for mapped top-level sessions", async () => {
       assert.doesNotMatch(JSON.stringify({ attention, interval }), /top secret prompt|child prompt/)
       await runtime.commands.get("project-time")?.handler("billable", topLevelContext as never)
       assert.deepEqual(runtime.notifications.at(-1), {
-        message: "Acme: attention 1 units, 300000ms @ 120 USD/h = 10.00 USD\nAcme: ai 1 units, 1000ms @ 30 USD/h = 0.01 USD",
+        message: "Acme: attention 1 units, 300000ms @ CA$120/h = CA$10.00\nAcme: ai 1 units, 1000ms @ CA$30/h = CA$0.01",
         type: "info",
       })
     } finally {
@@ -288,7 +287,7 @@ test("shows recent local project history with developer and billable state", asy
       await runtime.commands.get("project-time")?.handler("history", context as never)
 
       const message = runtime.notifications.at(-1)?.message ?? ""
-      assert.match(message, /^Project Time history\nProject: Project\nDeveloper meter: \$0\.01 \(dev\)$/m)
+      assert.match(message, /^Project Time history\nProject: Project\nDeveloper meter: CA\$0\.01 \(dev\)$/m)
       assert.match(message, /Developer time: 1 intervals, 1s/)
       assert.match(message, /Billable tracking: enabled, 2 records/)
       assert.match(message, /Recent developer time:\n- 2026-01-01T12:00:01.000Z: 1s/)
@@ -306,7 +305,6 @@ test("reports billable tracking disabled for an unmapped project", async () => {
       clients: {
         acme: {
           label: "Acme",
-          currency: "USD",
           attentionRatePerHour: "120",
           aiRatePerHour: "30",
         },
@@ -514,19 +512,19 @@ test("feature scenario tracks visible developer cost across prompts and idle tim
   try {
     setNow(start)
     await runtime.handlers.get("before_agent_start")?.({ prompt: "first prompt" } as never, ctx as never)
-    assert.equal(runtime.statusText, "dim:$0.00 (dev)")
+    assert.equal(runtime.statusText, "dim:CA$0.00 (dev)")
 
     setNow(start + 2 * 60 * 1000)
     await runtime.handlers.get("turn_end")?.({ type: "turn_end" } as never, ctx as never)
-    assert.equal(runtime.statusText, "dim:$1.83 (dev)")
+    assert.equal(runtime.statusText, "dim:CA$1.83 (dev)")
 
     setNow(start + 4 * 60 * 1000)
     await runtime.handlers.get("before_agent_start")?.({ prompt: "follow-up prompt" } as never, ctx as never)
-    assert.equal(runtime.statusText, "dim:$3.66 (dev)")
+    assert.equal(runtime.statusText, "dim:CA$3.66 (dev)")
 
     setNow(start + 9 * 60 * 1000)
     await runtime.handlers.get("turn_end")?.({ type: "turn_end" } as never, ctx as never)
-    assert.equal(runtime.statusText, "dim:$8.24 (dev)")
+    assert.equal(runtime.statusText, "dim:CA$8.24 (dev)")
 
     setNow(start + 10 * 60 * 1000)
     await runtime.commands.get("project-time")?.handler("", ctx as never)
@@ -534,7 +532,7 @@ test("feature scenario tracks visible developer cost across prompts and idle tim
       message: [
         "Project Time",
         "Project: unavailable",
-        "Developer meter: $8.24 (dev)",
+        "Developer meter: CA$8.24 (dev)",
         "Billable policies: not configured",
         "Commands: /project-time summary | /project-time billable | /project-time billable preview | /project-time history",
         "Tip: type /project-time followed by a space to choose a mode.",
@@ -571,11 +569,11 @@ test("reports a detailed attention summary without changing the compact status",
     assert.deepEqual(runtime.notifications, [
       {
         message:
-          "Project Time summary\nSession: session-1\nCost: $1.83 (dev)\nActive time: 2m 0s\nPrompt count: 1\nLast prompt: 2m 0s ago (2026-01-01T12:00:00.000Z)",
+          "Project Time summary\nSession: session-1\nCost: CA$1.83 (dev)\nActive time: 2m 0s\nPrompt count: 1\nLast prompt: 2m 0s ago (2026-01-01T12:00:00.000Z)",
         type: "info",
       },
     ])
-    assert.equal(runtime.statusText, "dim:$0.00 (dev)")
+    assert.equal(runtime.statusText, "dim:CA$0.00 (dev)")
   } finally {
     mock.restoreAll()
   }
@@ -853,7 +851,7 @@ test("reports an unavailable last prompt for an unrenderable persisted timestamp
   assert.deepEqual(runtime.notifications, [
     {
       message:
-        "Project Time summary\nSession: session-1\nCost: $12.34 (dev)\nActive time: 1m 0s\nPrompt count: 1\nLast prompt: unavailable",
+        "Project Time summary\nSession: session-1\nCost: CA$12.34 (dev)\nActive time: 1m 0s\nPrompt count: 1\nLast prompt: unavailable",
       type: "info",
     },
   ])
@@ -895,7 +893,7 @@ test("restores persisted state from full session history", async () => {
       message: [
         "Project Time",
         "Project: unavailable",
-        "Developer meter: $12.34 (dev)",
+        "Developer meter: CA$12.34 (dev)",
         "Billable policies: not configured",
         "Commands: /project-time summary | /project-time billable | /project-time billable preview | /project-time history",
         "Tip: type /project-time followed by a space to choose a mode.",
@@ -927,7 +925,7 @@ test("activates persisted state from full session history", async () => {
 
   await runtime.handlers.get("session_start")?.({ reason: "start" } as never, ctx as never)
 
-  assert.equal(runtime.statusText, "dim:$12.34 (dev)")
+  assert.equal(runtime.statusText, "dim:CA$12.34 (dev)")
 })
 
 test("skips billing for child sessions without clearing parent prompt status", async () => {
@@ -951,7 +949,7 @@ test("skips billing for child sessions without clearing parent prompt status", a
   )
 
   assert.equal(runtime.entries.length, 1)
-  assert.equal(runtime.statusText, "dim:$0.00 (dev)")
+  assert.equal(runtime.statusText, "dim:CA$0.00 (dev)")
 })
 
 test("skips child session activation without clearing parent status", async () => {
@@ -972,7 +970,7 @@ test("skips child session activation without clearing parent status", async () =
   await runtime.handlers.get("session_start")?.({ reason: "start" } as never, childCtx as never)
 
   assert.equal(runtime.entries.length, 1)
-  assert.equal(runtime.statusText, "dim:$0.00 (dev)")
+  assert.equal(runtime.statusText, "dim:CA$0.00 (dev)")
 })
 
 test("reports child sessions from the status command", async () => {
@@ -1003,7 +1001,6 @@ test("shows snapshotted billable time when current config cannot load", async ()
       sourceKind: "attention",
       durationMs: 300_000,
       ratePerHour: "120",
-      currency: "CAD",
     })}\n`)
     const runtime = createExtensionRuntime({
       billableTimePath,
@@ -1016,7 +1013,7 @@ test("shows snapshotted billable time when current config cannot load", async ()
     await runtime.commands.get("project-time")?.handler("billable", ctx as never)
 
     assert.deepEqual(runtime.notifications, [{
-      message: "Icefog: attention 1 units, 300000ms @ 120 CAD/h = 10.00 CAD",
+      message: "Icefog: attention 1 units, 300000ms @ CA$120/h = CA$10.00",
       type: "info",
     }])
   } finally {
@@ -1049,7 +1046,7 @@ test("clears status and skips billing when prompt config load fails", async () =
     },
   })
   const ctx = createContext(runtime, { parentSession: undefined })
-  runtime.statusText = "dim:$1.23 (dev)"
+  runtime.statusText = "dim:CA$1.23 (dev)"
 
   await runtime.handlers.get("before_agent_start")?.({ prompt: "hello" } as never, ctx as never)
 
@@ -1126,7 +1123,7 @@ test("clears status when session switch config load fails", async () => {
   ])
 })
 
-test("bills one top-level session at the full $120 hourly rate", async () => {
+test("bills one top-level session at the full CAD 120 hourly rate", async () => {
   const start = Date.UTC(2026, 0, 1, 12, 0, 0)
   let nowMs = start
   const runtime = createExtensionRuntime({ loadConfig: loadFullRateConfig })
@@ -1252,7 +1249,7 @@ test("resumes stale persisted session state from its settled shared ledger entry
     await resumed.handlers.get("session_start")?.({ reason: "resume" } as never, resumedCtx as never)
 
     assert.equal(latestState(first).totalCost.toString(), "0")
-    assert.equal(resumed.statusText, "dim:$1.00 (dev)")
+    assert.equal(resumed.statusText, "dim:CA$1.00 (dev)")
   } finally {
     mock.restoreAll()
   }
@@ -1437,7 +1434,6 @@ async function loadBillableRateConfig() {
       clients: {
         acme: {
           label: "Acme",
-          currency: "USD",
           attentionRatePerHour: "120",
           aiRatePerHour: "30",
         },
