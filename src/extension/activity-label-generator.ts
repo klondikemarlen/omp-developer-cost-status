@@ -1,6 +1,4 @@
-
 import type { ExtensionApi, ExtensionContext } from "@/extension/types.js"
-
 
 const activityLabelPrompt = [
   "Generate a concise coarse Project Time activity label for the current user request.",

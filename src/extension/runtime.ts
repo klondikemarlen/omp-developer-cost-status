@@ -264,7 +264,6 @@ export class ProjectTimeRuntime {
     }
   }
 
-
   private async showHistory(
     ctx: ExtensionContext,
     config: ProjectTimeConfig,
