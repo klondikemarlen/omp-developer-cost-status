@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto"
 import { parseActivityLabel } from "@/time-log/domain/activity.js"
+import { parseRepositoryIdentity } from "@/utils/parse-repository-identity.js"
 
 import type {
   AutomaticTimeLogInput,
@@ -24,13 +25,21 @@ export function recordAutomaticTimeLogEntry(
   }
 
   const existingEntry = entries[existingIndex]
-  if (entry.endAtMs <= existingEntry.endAtMs) {
+  const addsRepositoryIdentity =
+    existingEntry.repositoryIdentity === undefined
+    && entry.repositoryIdentity !== undefined
+  const extendsEntry = entry.endAtMs > existingEntry.endAtMs
+  if (!addsRepositoryIdentity && !extendsEntry) {
     return { changed: false, entry: existingEntry }
   }
 
-  const extendedEntry = { ...existingEntry, endAtMs: entry.endAtMs }
-  entries[existingIndex] = extendedEntry
-  return { changed: true, entry: extendedEntry }
+  const updatedEntry = {
+    ...existingEntry,
+    ...(addsRepositoryIdentity ? { repositoryIdentity: entry.repositoryIdentity } : {}),
+    ...(extendsEntry ? { endAtMs: entry.endAtMs } : {}),
+  }
+  entries[existingIndex] = updatedEntry
+  return { changed: true, entry: updatedEntry }
 }
 
 function createTimeLogEntry(
@@ -39,11 +48,16 @@ function createTimeLogEntry(
 ): TimeLogEntry {
   const project = input.project.trim()
   const repositoryId = input.repositoryId.trim()
+  const repositoryIdentity = parseRepositoryIdentity(input.repositoryIdentity)
   const sourceKey = input.sourceKey.trim()
   const { startAtMs, endAtMs, sourceKind, sessionId } = input
   const activity = parseActivityLabel(input.activity)
   if (input.activity !== undefined && activity === undefined) {
     throw new Error("Time log activity label is invalid.")
+  }
+
+  if (input.repositoryIdentity !== undefined && repositoryIdentity === undefined) {
+    throw new Error("Time log repository identity is invalid.")
   }
 
   if (project.length === 0) throw new Error("Time log project is required.")
@@ -66,6 +80,7 @@ function createTimeLogEntry(
     sourceKind,
     project,
     repositoryId,
+    ...(repositoryIdentity === undefined ? {} : { repositoryIdentity }),
     ...(sessionId === undefined ? {} : { sessionId }),
     ...(activity === undefined ? {} : { activity }),
     startAtMs,
